@@ -293,8 +293,9 @@ void ActionStackPtrFlow::analyzeExtraPop(Funcdata &data,AddrSpace *stackspace,in
       continue;
     }
     PcodeOp *op = vn->getDef();
+    OpCode opc = op->code();
 
-    if (op->code() == CPUI_INDIRECT) {
+    if (opc == CPUI_INDIRECT) {
       Varnode *iopvn = op->getIn(1);
       if (iopvn->getSpace()->getType()==IPTR_IOP) {
 	PcodeOp *iop = PcodeOp::getOpFromConst(iopvn->getAddr());
@@ -314,6 +315,11 @@ void ActionStackPtrFlow::analyzeExtraPop(Funcdata &data,AddrSpace *stackspace,in
     paramlist.push_back(data.newConstant(sz,soln&calc_mask(sz)));
     data.opSetOpcode(op,CPUI_INT_ADD);
     data.opSetAllInput(op,paramlist);
+    if (opc == CPUI_MULTIEQUAL) {
+      BlockBasic *bb = op->getParent();
+      data.opUninsert(op);
+      data.opInsertBegin(op, bb);
+    }
   }
   return;
 }
@@ -1150,6 +1156,7 @@ MapEntry *ActionConstantPtr::isPointer(AddrSpace *spc,Varnode *vn,PcodeOp *op,in
   }
 
   if (rampoint.isInvalid()) return (MapEntry *)0;
+  if (!rampoint.highPtrPossible(1)) return (MapEntry *)0;
     // Since we are looking for a global address
     // Assume it is address tied and use empty usepoint
   MapEntry *entry = data.getScopeLocal()->getParent()->queryContainer(rampoint,1,Address());
@@ -1514,18 +1521,19 @@ int4 ActionExtraPopSetup::apply(Funcdata &data)
   for(int4 i=0;i<data.numCalls();++i) {
     fc = data.getCallSpecs(i);
     if (fc->getExtraPop() == 0) continue; // Stack pointer is undisturbed
-    op = data.newOp(2,fc->getOp()->getAddr());
-    data.newVarnodeOut(sb_size,sb_addr,op);
-    data.opSetInput(op,data.newVarnode(sb_size,sb_addr),0);
     if (fc->getExtraPop() != ProtoModel::extrapop_unknown) { // We know exactly how stack pointer is changed
       fc->setEffectiveExtraPop(fc->getExtraPop());
+      op = data.newOp(2,fc->getOp()->getAddr());
+      data.newVarnodeOut(sb_size,sb_addr,op);
+      data.opSetInput(op,data.newVarnode(sb_size,sb_addr),0);
       data.opSetOpcode(op,CPUI_INT_ADD);
       data.opSetInput(op,data.newConstant(sb_size,fc->getExtraPop()),1);
       data.opInsertAfter(op,fc->getOp());
     }
     else {			// We don't know exactly, so we create INDIRECT
-      data.opSetOpcode(op,CPUI_INDIRECT);
-      data.opSetInput(op,data.newVarnodeIop(fc->getOp()),1);
+      op = data.newIndirect(fc->getOp());
+      data.newVarnodeOut(sb_size,sb_addr,op);
+      data.opSetInput(op,data.newVarnode(sb_size,sb_addr),0);
       data.opInsertBefore(op,fc->getOp());
     }
   }
@@ -1554,6 +1562,7 @@ void ActionFuncLink::funcLinkInput(FuncCallSpecs *fc,Funcdata &data)
     bool setplaceholder = varargs;
     for(int4 i=0;i<numparam;++i) {
       ProtoParameter *param = fc->getParam(i);
+      if (!param->hasStorage()) continue;
       active->registerTrial(param->getAddress(),param->getSize());
       active->getTrial(i).markActive(); // Parameter is not optional
       if (varargs){
@@ -1633,7 +1642,7 @@ void ActionFuncLink::funcLinkOutput(FuncCallSpecs *fc,Funcdata &data)
   if (fc->isOutputLocked()) {
     ProtoParameter *outparam = fc->getOutput();
     Datatype *outtype = outparam->getType();
-    if (outtype->getMetatype() != TYPE_VOID) {
+    if (outparam->hasStorage()) {
       int4 sz = outparam->getSize();
       if (outtype->getMetatype() == TYPE_BOOL && data.isTypeRecoveryOn())
 	data.opMarkCalculatedBool(callop);
@@ -1771,6 +1780,8 @@ int4 ActionParamDouble::apply(Funcdata &data)
       Datatype *tp = param->getType();
       if (!tp->isPrimitiveWhole())
 	continue;		// Not double precision objects
+      if (!param->hasStorage())
+	continue;
       Varnode *vn = data.findVarnodeInput(tp->getSize(),param->getAddress());
       if (vn == (Varnode *)0) continue;
       if (vn->getSize() < minDoubleSize) continue;
@@ -1942,60 +1953,37 @@ void ActionReturnRecovery::buildReturnOutput(ParamActive *active,PcodeOp *retop,
   }
   if (newparam.size()<=2)	// Easy zero or one return varnode case
     data.opSetAllInput(retop,newparam);
-  else if (newparam.size()==3) { // Two piece concatenation case
-    Varnode *lovn = newparam[1];
-    Varnode *hivn = newparam[2];
-    ParamTrial &triallo( active->getTrial(0) );
-    ParamTrial &trialhi( active->getTrial(1) );
-    Address joinaddr = data.getArch()->constructJoinAddress(data.getArch()->translate,
-							    trialhi.getAddress(),trialhi.getSize(),
-							    triallo.getAddress(),triallo.getSize());
-    PcodeOp *newop = data.newOp(2,retop->getAddr());
-    data.opSetOpcode(newop,CPUI_PIECE);
-    Varnode *newwhole = data.newVarnodeOut(trialhi.getSize()+triallo.getSize(),joinaddr,newop);
-    newwhole->setWriteMask();		// Don't let new Varnode cause additional heritage
-    data.opInsertBefore(newop,retop);
-    newparam.pop_back();
-    newparam.back() = newwhole;
-    data.opSetAllInput(retop,newparam);
-    data.opSetInput(newop,hivn,0);
-    data.opSetInput(newop,lovn,1);
-  }
-  else { // We may have several varnodes from a single container
-    // Concatenate them into a single result
+  else {
+    vector<VarnodeData> pieces;
+    int4 wholeSize = 0;
+    for(int4 i=newparam.size()-1;i>=1;--i) {
+      pieces.emplace_back(newparam[i]->getAddr(),newparam[i]->getSize());
+      wholeSize += newparam[i]->getSize();
+    }
+    Address wholeAddr = data.getArch()->joinPieces(pieces, data.getArch()->translate);
+    Varnode *lastVn = newparam[1];		// Start with least significant piece
+    int4 curSize = lastVn->getSize();
+    for(int4 i=2;i<newparam.size();++i) {	// Concatenate sequentially from least to most significant
+      Varnode *vn = newparam[i];
+      curSize += vn->getSize();			// Size of current concatenation
+      Address addr = wholeAddr;			// Calculate address of current concatenation
+      if (curSize != wholeSize) {
+	if (addr.isBigEndian())
+	  addr = addr + (wholeSize - curSize);
+	addr.renormalize(curSize);
+      }
+      PcodeOp *newop = data.newOp(2,retop->getAddr());
+      data.opSetOpcode(newop,CPUI_PIECE);
+      Varnode *newout = data.newVarnodeOut(lastVn->getSize()+vn->getSize(),addr,newop);
+      newout->setWriteMask();		// Don't let new Varnode cause additional heritage
+      data.opSetInput(newop,vn,0);	// Most sig part
+      data.opSetInput(newop,lastVn,1);
+      data.opInsertBefore(newop,retop);
+      lastVn= newout;
+    }
     newparam.clear();
     newparam.push_back(retop->getIn(0));
-    int4 offmatch = 0;
-    Varnode *preexist = (Varnode *)0;
-    for(int4 i=0;i<active->getNumTrials();++i) {
-      ParamTrial &curtrial(active->getTrial(i));
-      if (!curtrial.isUsed()) break;
-      if (curtrial.getSlot() >= retop->numInput()) break;
-      if (preexist == (Varnode *)0) {
-	preexist = retop->getIn(curtrial.getSlot());
-	offmatch = curtrial.getOffset() + curtrial.getSize();
-      }
-      else if (offmatch == curtrial.getOffset()) {
-	offmatch += curtrial.getSize();
-	Varnode *vn = retop->getIn(curtrial.getSlot());
-	// Concatenate the preexisting pieces with this new piece
-	PcodeOp *newop = data.newOp(2,retop->getAddr());
-	data.opSetOpcode(newop,CPUI_PIECE);
-	Address addr = preexist->getAddr();
-	if (vn->getAddr() < addr)
-	  addr = vn->getAddr();
-	Varnode *newout = data.newVarnodeOut(preexist->getSize()+vn->getSize(),addr,newop);
-	newout->setWriteMask();		// Don't let new Varnode cause additional heritage
-	data.opSetInput(newop,vn,0);	// Most sig part
-	data.opSetInput(newop,preexist,1);
-	data.opInsertBefore(newop,retop);
-	preexist = newout;
-      }
-      else
-	break;
-    }
-    if (preexist != (Varnode *)0)
-      newparam.push_back(preexist);
+    newparam.push_back(lastVn);
     data.opSetAllInput(retop,newparam);
   }
 }
@@ -2068,6 +2056,7 @@ int4 ActionRestrictLocal::apply(Funcdata &data)
     int4 numparam = fc->numParams();
     for(int4 j=0;j<numparam;++j) {
       ProtoParameter *param = fc->getParam(j);
+      if (!param->hasStorage()) continue;
       Address addr = param->getAddress();
       spacetype tp = addr.getSpace()->getType();
       if (tp == IPTR_SPACEBASE) {
@@ -4848,7 +4837,7 @@ int4 ActionPrototypeTypes::apply(Funcdata &data)
 
   if (data.getFuncProto().isOutputLocked()) {
     ProtoParameter *outparam = data.getFuncProto().getOutput();
-    if (outparam->getType()->getMetatype() != TYPE_VOID) {
+    if (outparam->hasStorage()) {
       for(iter=data.beginOp(CPUI_RETURN);iter!=iterend;++iter) {
 	PcodeOp *op = *iter;
 	if (op->isDead()) continue;
@@ -4901,6 +4890,7 @@ int4 ActionPrototypeTypes::apply(Funcdata &data)
     int4 numparams = data.getFuncProto().numParams();
     for(int4 i=0;i<numparams;++i) {
       ProtoParameter *param = data.getFuncProto().getParam(i);
+      if (!param->hasStorage()) continue;
       Varnode *vn = data.newVarnode( param->getSize(), param->getAddress());
       vn = data.setInputVarnode(vn);
       vn->setLockedInput();
@@ -4916,30 +4906,190 @@ int4 ActionPrototypeTypes::apply(Funcdata &data)
   return 0;
 }
 
+/// Sort by address, then by data-type size, then by data-type ordering.
+/// \param op2 is the reference to compare with
+/// \return \b true if \b this should be ordered before \b op2
+bool ActionInputPrototype::InputRef::operator<(const InputRef &op2) const
+
+{
+  if (addr != op2.addr)
+    return (addr < op2.addr);
+  if (dataType == op2.dataType)
+    return false;
+  if (dataType->getSize() != op2.dataType->getSize())
+    return (op2.dataType->getSize() < dataType->getSize());	// Bigger data-types first
+  return (dataType->typeOrder(*op2.dataType) <= 0);
+}
+
+/// Remove the later reference of any pairs that overlap.
+/// \param refs is the list of references
+void ActionInputPrototype::InputRef::dedup(list<InputRef> &refs)
+
+{
+  list<InputRef>::const_iterator iter=refs.begin();
+  if (iter == refs.end()) return;
+  Address lastAddr = (*iter).addr;
+  int4 size = (*iter).dataType->getSize();
+  ++iter;
+  while(iter != refs.end()) {
+    if ((*iter).addr.overlap(0, lastAddr, size) >= 0)
+      iter = refs.erase(iter);
+    else {
+      lastAddr = (*iter).addr;
+      size = (*iter).dataType->getSize();
+      ++iter;
+    }
+  }
+}
+
+/// \brief Gather references into the region of the stack reserved for parameters
+///
+/// Look for PTRSUBs and PTRADDs off of the \e spacebase pointer for the local scope.
+/// Calculate the base address being referenced, and if it is a possible parameter,
+/// store the address and data-type associated with the reference.  Sort and deup the references.
+/// \param refs will hold any collected parameter references
+/// \param data is the function
+void ActionInputPrototype::gatherParamSpacebaseRefs(list<InputRef> &refs,Funcdata &data)
+
+{
+  AddrSpace *spcid = data.getScopeLocal()->getSpaceId();
+  Varnode *spcvn = data.findSpacebaseInput(spcid);
+  if (spcvn == (Varnode *)0) return;
+  Datatype *spctype = spcvn->getType();
+  if (spctype->getMetatype() != TYPE_PTR) return;
+  spctype = ((TypePointer *)spctype)->getPtrTo();
+  if (spctype->getMetatype() != TYPE_SPACEBASE) return;
+  TypeSpacebase *sbtype = (TypeSpacebase *)spctype;
+  const RangeList &paramRange(data.getFuncProto().getParamRange());
+  list<PcodeOp *>::const_iterator iter;
+  Address addr;
+  Datatype *dt;
+
+  for(iter=spcvn->beginDescend();iter!=spcvn->endDescend();++iter) {
+    PcodeOp *op = *iter;
+    Varnode *vn;
+    OpCode opc = op->code();
+    if (opc == CPUI_PTRSUB) {
+      vn = op->getIn(1);
+      addr = sbtype->getAddress(vn->getOffset(),vn->getSize(),op->getAddr());
+    }
+    else if (opc == CPUI_PTRADD) {
+      vn = op->getIn(1);
+      if (vn->isConstant()) {
+	uintb off = vn->getOffset() * op->getIn(2)->getOffset();
+	addr = sbtype->getAddress(off,vn->getSize(),op->getAddr());
+      }
+      else
+	continue;
+    }
+    else
+      continue;
+    if (paramRange.inRange(addr, 1)) {
+      dt = op->getOut()->getTypeDefFacing();
+      if (dt->getMetatype() == TYPE_PTR) {
+	dt = ((TypePointer *)dt)->getPtrTo();
+	if (dt->getSize() == 0)
+	  dt = data.getArch()->types->getBase(1,TYPE_UNKNOWN);
+      }
+      else
+	dt = data.getArch()->types->getBase(1,TYPE_UNKNOWN);
+      if (!data.getFuncProto().possibleInputParam(addr, dt->getSize())) {
+	VarnodeData vData;
+	if (data.getFuncProto().unjustifiedInputParam(addr, dt->getSize(), vData)) {
+	  if (vData.getAddr() == addr && vData.size > dt->getSize()) {
+	    // If the address range is unjustified but can be justified by just changing the size (big endian case)
+	    // Change the data-type to be the justified size
+	    dt = data.getArch()->types->getBase(vData.size,TYPE_UNKNOWN);
+	  }
+	}
+      }
+      refs.push_back(InputRef(addr,dt));
+    }
+  }
+  refs.sort();
+  InputRef::dedup(refs);
+}
+
+/// \brief Add an active parameter trial for any reference that is a possible input and doesn't intersect a Varnode
+///
+/// \param active is the container accumulating parameter trials
+/// \param refs is the list of references
+/// \param typeList accumulates a data-type per parameter trial
+/// \param data is the function
+void ActionInputPrototype::markActiveInputRefs(ParamActive &active,list<InputRef> &refs,vector<Datatype *> &typeList,
+					       Funcdata &data)
+
+{
+  for(list<InputRef>::const_iterator iter=refs.begin();iter!=refs.end();++iter) {
+    if (data.hasInputIntersection((*iter).dataType->getSize(), (*iter).addr))
+      continue;
+    if (!data.getFuncProto().possibleInputParam((*iter).addr, (*iter).dataType->getSize()))
+      continue;
+    int4 slot = active.getNumTrials();
+    active.registerTrial((*iter).addr,(*iter).dataType->getSize());
+    typeList.push_back((*iter).dataType);
+    ParamTrial &trial(active.getTrial(slot));
+    trial.markActive();
+  }
+}
+
+/// \brief Add a Symbol for any reference that doesn't intersect an existing input Varnode
+///
+/// \param refs is the list of references
+/// \param data is the function
+void ActionInputPrototype::addRefOnlySymbols(list<InputRef> &refs,Funcdata &data)
+
+{
+  for(list<InputRef>::const_iterator iter=refs.begin();iter!=refs.end();++iter) {
+    if (data.getScopeLocal()->findOverlap((*iter).addr, (*iter).dataType->getSize()))
+      continue;
+    data.getScopeLocal()->addSymbol("", (*iter).dataType, (*iter).addr, Address());
+  }
+}
+
 int4 ActionInputPrototype::apply(Funcdata &data)
 
 {
-  vector<Varnode *> triallist;
+  vector<Datatype *> typeList;
   ParamActive active(false);
   Varnode *vn;
+  list<InputRef> inputRefs;
 
   data.getScopeLocal()->clearCategory(Symbol::fake_input);
   data.getFuncProto().clearUnlockedInput();
+  if (data.getScopeLocal()->hasOpenParamRefs())
+    gatherParamSpacebaseRefs(inputRefs, data);
   if (!data.getFuncProto().isInputLocked()) {
     VarnodeDefSet::const_iterator iter,enditer;
     iter = data.beginDef(Varnode::input);
     enditer = data.endDef(Varnode::input);
+    bool useHigh = data.isHighOn();
     while(iter != enditer) {
       vn = *iter;
       ++iter;
       if (data.getFuncProto().possibleInputParam(vn->getAddr(),vn->getSize())) {
 	int4 slot = active.getNumTrials();
-	active.registerTrial(vn->getAddr(),vn->getSize());
+	if (vn->isPersist()) {
+	  int4 sz;
+	  Address addr = data.findDisjointCover(vn, sz);
+	  Datatype *ct;
+	  if (sz == vn->getSize())
+	    ct = useHigh ? vn->getHigh()->getType() : vn->getType();
+	  else
+	    ct = data.getArch()->types->getBase(sz, TYPE_UNKNOWN);
+	  active.registerTrial(addr,sz);
+	  typeList.push_back(ct);
+	}
+	else {
+	  active.registerTrial(vn->getAddr(),vn->getSize());
+	  Datatype *ct = useHigh ? vn->getHigh()->getType() : vn->getType();
+	  typeList.push_back(ct);
+	}
 	if (!vn->hasNoDescend())
 	  active.getTrial(slot).markActive(); // Mark as active if it has descendants
-	triallist.push_back(vn);
       }
     }
+    markActiveInputRefs(active, inputRefs, typeList, data);
     data.getFuncProto().resolveModel(&active);
     data.getFuncProto().deriveInputMap(&active); // Derive the correct prototype from trials
     // Create any unreferenced input varnodes
@@ -4951,19 +5101,15 @@ int4 ActionInputPrototype::apply(Funcdata &data)
 	  paramtrial.markNoUse();
 	}
 	else {
-	  vn = data.newVarnode(paramtrial.getSize(),paramtrial.getAddress());
-	  vn = data.setInputVarnode(vn);
-	  int4 slot = triallist.size();
-	  triallist.push_back(vn);
+	  int4 slot = typeList.size();
+	  typeList.push_back(data.getArch()->types->getBase(paramtrial.getSize(), TYPE_UNKNOWN));
 	  paramtrial.setSlot(slot + 1);
 	}
       }
     }
-    if (data.isHighOn())
-      data.getFuncProto().updateInputTypes(data,triallist,&active);
-    else
-      data.getFuncProto().updateInputNoTypes(data,triallist,&active);
+    data.getFuncProto().updateInputTypes(data,typeList,&active);
   }
+  addRefOnlySymbols(inputRefs, data);
   data.clearDeadVarnodes();
 #ifdef OPACTION_DEBUG
   if ((flags&rule_debug)==0) return 0;
@@ -5233,7 +5379,7 @@ void ActionInferTypes::buildLocaltypes(Funcdata &data)
     SymbolEntry *entry = vn->getSymbolEntry();
     if (entry != (SymbolEntry *)0 && !vn->isTypeLock() && entry->getSymbol()->isTypeLocked()) {
       int4 curOff = entry->getOffset();
-      if (!entry->isDynamic())
+      if (entry->isMapEntry())
 	curOff += (vn->getAddr().getOffset() - ((MapEntry *)entry)->getAddr().getOffset());
       ct = typegrp->getExactPiece(entry->getSymbol()->getType(), curOff, vn->getSize());
       if (ct == (Datatype *)0 || ct->getMetatype() == TYPE_UNKNOWN)	// If we can't resolve, or resolve to UNKNOWN
@@ -5764,7 +5910,7 @@ void ActionDatabase::universalAction(Architecture *conf)
 	actprop->addRule( new RuleShift2Mult("analysis") );
 	actprop->addRule( new RuleShiftPiece("analysis") );
 	actprop->addRule( new RuleMultiCollapse("analysis") );
-	actprop->addRule( new RuleIndirectCollapse("analysis") );
+	actprop->addRule( new RuleAliasUpdate("analysis") );
 	actprop->addRule( new Rule2Comp2Mult("analysis") );
 	actprop->addRule( new RuleSub2Add("analysis") );
 	actprop->addRule( new RuleCarryElim("analysis") );
@@ -5919,6 +6065,7 @@ void ActionDatabase::universalAction(Architecture *conf)
     actcleanup->addRule( new RulePtrsubCharConstant("cleanup") );
     actcleanup->addRule( new RuleExtensionPush("cleanup") );
     actcleanup->addRule( new RulePieceStructure("cleanup") );
+    actcleanup->addRule( new RuleAndStructure("cleanup") );
     actcleanup->addRule( new RuleSplitCopy("splitcopy") );
     actcleanup->addRule( new RuleSplitLoad("splitpointer") );
     actcleanup->addRule( new RuleSplitStore("splitpointer") );

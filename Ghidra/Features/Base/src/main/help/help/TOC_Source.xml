@@ -52,7 +52,7 @@
 <tocref id="Root">
 
     <tocdef id="Intro" sortgroup="1a" text="Introduction"  target="help/topics/Intro/Intro.htm" />
-    
+        
     <tocdef id="Getting Started" 
 			sortgroup="a"
 	        text="Getting Started"
@@ -334,6 +334,7 @@
                 <tocdef id="Scalars" sortgroup="e" text="Scalars" target="help/topics/ScalarSearchPlugin/The_Scalar_Table.htm" />
                 <tocdef id="Instruction Patterns" sortgroup="f" text="Instruction Patterns" target="help/topics/Search/Search_Instruction_Patterns.htm" />
                 <tocdef id="Address Tables" sortgroup="g" text="Address Tables" target="help/topics/Search/Search_for_AddressTables.htm" />
+        		<tocdef id="Bento View" text="Bento View"  target="help/topics/BentoServicePlugin/BentoServicePlugin.html" />
                 <tocdef id="Direct References" sortgroup="h" text="Direct References" target="help/topics/Search/Search_for_DirectReferences.htm" />
                 <tocdef id="Search Results Window" sortgroup="i" text="Query Results Window" target="help/topics/Search/Query_Results_Dialog.htm" />
             </tocdef>
@@ -388,6 +389,7 @@
     <tocdef id="Glossary" sortgroup="i" text="Glossary"  target="help/topics/Glossary/glossary.htm" />
     <tocdef id="What's New" sortgroup="j" text="What's New" target="external:docs/WhatsNew.html" />
     <tocdef id="Tips of the Day" sortgroup="k" text="Tips of the Day" target="help/topics/Misc/Tips.htm" />
+    <tocdef id="Accessibility" sortgroup="l" text="Accessibility"  target="help/topics/Accessibility/AccessibilityOverview.html" />
     <tocdef id="Appendix" sortgroup="z" text="Appendix"  target="help/topics/Misc/Appendix.htm">
         <tocdef id="Block Models" sortgroup="a" text="Block Models"  target="help/topics/BlockModel/Block_Model.htm" />
         <tocdef id="Languages" sortgroup="b" text="Languages"     target="help/topics/LanguageProviderPlugin/Languages.htm" />

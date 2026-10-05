@@ -905,6 +905,18 @@ public:
 /// If the prototype wasn't originally known, the discovered input Varnodes are analyzed
 /// to determine a prototype based on the prototype model.
 class ActionInputPrototype : public Action {
+  /// \brief A reference into the stack
+  class InputRef {
+  public:
+    Address addr;		///< Address of region being referenced
+    Datatype *dataType;		///< Data-type associated with the region
+    InputRef(Address &ad,Datatype *dt) : addr(ad) { dataType = dt; }	///< Constructor
+    bool operator<(const InputRef &op2) const;		///< Compare \b this with another reference
+    static void dedup(list<InputRef> &refs);		///< Deduplicate a (sorted) list of references
+  };
+  void gatherParamSpacebaseRefs(list<InputRef> &refs,Funcdata &data);
+  void markActiveInputRefs(ParamActive &active,list<InputRef> &refs,vector<Datatype *> &typeList,Funcdata &data);
+  void addRefOnlySymbols(list<InputRef> &refs,Funcdata &data);
 public:
   ActionInputPrototype(const string &g) : Action(rule_onceperfunc,"inputprototype",g) {}	///< Constructor
   virtual Action *clone(const ActionGroupList &grouplist) const {
@@ -1031,7 +1043,8 @@ public:
     if (!grouplist.contains(getGroup())) return (Action *)0;
     return new ActionCopyMarker(getGroup());
   }
-  virtual int4 apply(Funcdata &data) { data.getMerge().markInternalCopies(); return 0; }
+  virtual int4 apply(Funcdata &data) {
+    data.getMerge().markInternalCopies(); data.getMerge().markPurePaddingCopies(); return 0; }
 };
 
 /// \brief Attach \e dynamically mapped symbols to Varnodes in time for data-type propagation
