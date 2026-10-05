@@ -1133,13 +1133,32 @@ bool FlowInfo::testHardInlineRestrictions(Funcdata *inlinefd,PcodeOp *op,Address
 
 {
   if (!inlinefd->getFuncProto().isNoReturn()) {
-    list<PcodeOp *>::iterator iter = op->getInsertIter();
-    ++iter;
-    if (iter == obank.endDead()) {
+    // Raw ops are not necessarily in instruction order: a previously
+    // visited continuation may precede this call in the bank.
+    PcodeOp *nextop = (PcodeOp *)0;
+    try {
+      nextop = fallthruOp(op);
+    }
+    catch (LowlevelError &err) {
+      // No translated continuation at the instruction's fall-through.
+    }
+    if (nextop == (PcodeOp *)0) {
       inline_head->warning("No fallthrough prevents inlining here",op->getAddr());
       return false;
     }
-    PcodeOp *nextop = *iter;
+    // CALL_RETURN overrides model a tail jump with a synthetic return at
+    // the same instruction.  There is no caller continuation to branch to:
+    // preserve the callee's real RETURN operations instead.  A real return
+    // has a dynamic destination and must not take this path.
+    if (nextop->code() == CPUI_RETURN && nextop->getAddr() == op->getAddr() &&
+        nextop->getHaltType() == 0 && nextop->getIn(0)->isConstant() &&
+        nextop->getIn(0)->getOffset() == 0) {
+      // The converted call is now a terminal BRANCH. Remove the synthetic
+      // return: retaining it adds an unreachable return to the caller CFG.
+      data.opDestroyRaw(nextop);
+      retaddr = Address();
+      return true;
+    }
     retaddr = nextop->getAddr();
     if (op->getAddr() == retaddr) {
       inline_head->warning("Return address prevents inlining here",op->getAddr());
