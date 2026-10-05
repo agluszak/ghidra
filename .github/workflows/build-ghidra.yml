@@ -1,6 +1,12 @@
 name: Build Ghidra
 
-on: [push]
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -28,3 +34,20 @@ jobs:
 
       - name: Build Ghidra
         run: ./gradlew buildGhidra --parallel
+
+      - name: Publish pinned Linux distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=(build/dist/ghidra_*.zip)
+          test "${#archive[@]}" -eq 1
+          mv "${archive[0]}" build/dist/ghidra-linux.zip
+          mkdir -p build/dist/python
+          unzip -j build/dist/ghidra-linux.zip '*/Ghidra/Features/PyGhidra/pypkg/dist/*.whl' -d build/dist/python
+          sha256sum build/dist/ghidra-linux.zip > build/dist/SHA256SUMS
+          gh release create "wizardry-$GITHUB_SHA" \
+            build/dist/ghidra-linux.zip build/dist/SHA256SUMS build/dist/python/*.whl \
+            --target "$GITHUB_SHA" --title "Wizardry Ghidra $GITHUB_SHA (Linux)" \
+            --notes "Linux distribution built from agluszak/ghidra commit $GITHUB_SHA, including the fork's native comparison fixes."

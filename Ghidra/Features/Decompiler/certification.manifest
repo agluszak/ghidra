@@ -133,3 +133,10 @@ src/main/help/help/topics/DecompilePlugin/images/Undefined.png||GHIDRA||||END|
 src/main/resources/images/decompileFunction.gif||GHIDRA||reviewed||END|
 src/main/resources/images/eliminateUnreachable.png||GHIDRA||||END|
 src/main/resources/images/readOnly.png||GHIDRA||||END|
+src/decompile/datatests/inline-tail.xml||GHIDRA||||END|
+src/decompile/datatests/inline-repeated.xml||GHIDRA||||END|
+src/decompile/datatests/inline-repeated-loop.xml||GHIDRA||||END|
+src/decompile/datatests/inline-repeated-tail.xml||GHIDRA||||END|
+src/decompile/datatests/inline-repeated-switch.xml||GHIDRA||||END|
+src/decompile/datatests/inline-nested-switch.xml||GHIDRA||||END|
+src/decompile/datatests/inline-repeated-noreturn.xml||GHIDRA||||END|
