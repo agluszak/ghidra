@@ -41,13 +41,7 @@ public class PythonTypeStubFieldTest {
 				}
 				class Fields$Shared {}
 				""");
-			DocumentationTool tool = ToolProvider.getSystemDocumentationTool();
-			try (StandardJavaFileManager files = tool.getStandardFileManager(null, null, null)) {
-				StringWriter output = new StringWriter();
-				assertTrue(output.toString(), tool.getTask(output, files, null,
-					PythonTypeStubDoclet.class, List.of("-d", root.resolve("stubs").toString()),
-					files.getJavaFileObjects(source)).call());
-			}
+			render(source, root.resolve("stubs"));
 			String stub = Files.readString(root.resolve("stubs/fixture-stubs/__init__.pyi"));
 			assertTrue(stub.contains("VALID: typing.Final = 1"));
 			assertTrue(stub.contains("from_: typing.Final = 3"));
@@ -66,4 +60,45 @@ public class PythonTypeStubFieldTest {
 			}
 		}
 	}
+	@Test
+	public void removesRedundantInterfaceAncestors() throws Exception {
+		Path root = Files.createTempDirectory("stub-interface-test");
+		try {
+			Path source = root.resolve("Interfaces.java");
+			Files.writeString(source, """
+				package fixture;
+				public class Interfaces {
+					public interface Root { void release(); }
+					public interface Store extends Root {}
+					public interface Other {}
+					public interface View extends Root, Other, Store {}
+					public static class Parent implements Root { public void release() {} }
+					public static class Child extends Parent implements Root {}
+				}
+				""");
+			String stub = render(source, root.resolve("stubs"));
+			assertTrue(stub.contains("class View(Interfaces.Other, Interfaces.Store)"));
+			assertTrue(stub.contains("class Child(Interfaces.Parent)"));
+			assertTrue(stub.contains("class Store(Interfaces.Root)"));
+		}
+		finally {
+			try (var paths = Files.walk(root)) {
+				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+					Files.delete(path);
+				}
+			}
+		}
+	}
+
+	private static String render(Path source, Path dest) throws Exception {
+		DocumentationTool tool = ToolProvider.getSystemDocumentationTool();
+		try (StandardJavaFileManager files = tool.getStandardFileManager(null, null, null)) {
+			StringWriter output = new StringWriter();
+			boolean success = tool.getTask(output, files, null, PythonTypeStubDoclet.class,
+				List.of("-d", dest.toString()), files.getJavaFileObjects(source)).call();
+			assertTrue(output.toString(), success);
+		}
+		return Files.readString(dest.resolve("fixture-stubs/__init__.pyi"));
+	}
+
 }

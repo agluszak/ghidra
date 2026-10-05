@@ -655,8 +655,14 @@ class PythonTypeStubType extends PythonTypeStubElement<TypeElement> {
 	 * @return the interfaces
 	 */
 	private Stream<String> getInterfaces() {
-		return el.getInterfaces()
-				.stream()
+		var interfaces = el.getInterfaces();
+		var types = doclet.getTypeUtils();
+		return interfaces.stream()
+				// Java permits redundant ancestors; Python's C3 MRO does not.
+				.filter(candidate -> !(el.getSuperclass() instanceof DeclaredType parent &&
+					types.isSubtype(parent, candidate)))
+				.filter(candidate -> interfaces.stream().noneMatch(other ->
+					other != candidate && types.isSubtype(other, candidate)))
 				.map(this::sanitizeQualifiedName);
 	}
 
