@@ -49,6 +49,7 @@ jobs:
           mv "${archive[0]}" build/dist/ghidra-linux.zip
           mkdir -p build/dist/python
           unzip -j build/dist/ghidra-linux.zip '*/Ghidra/Features/PyGhidra/pypkg/dist/pyghidra-*.whl' -d build/dist/python
+          unzip -j build/dist/ghidra-linux.zip '*/docs/ghidra_stubs/*.whl' -d build/dist/python
           sha256sum build/dist/ghidra-linux.zip > build/dist/SHA256SUMS
           gh release create "wizardry-$GITHUB_SHA" \
             build/dist/ghidra-linux.zip build/dist/SHA256SUMS build/dist/python/*.whl \
