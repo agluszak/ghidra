@@ -1,0 +1,25 @@
+<decompilertest>
+<binaryimage arch="x86:LE:32:default:windows">
+<!-- Authored fixture: two branching calls write distinct slots in one array. -->
+<bytechunk space="ram" offset="0x1000" readonly="true">568b74240856e8f501000083c4048d460850e8e901000083c4048b460403460c5ec3</bytechunk>
+<bytechunk space="ram" offset="0x1200" readonly="true">8b4424048338007408c7400403000000c3c7400404000000c3</bytechunk>
+<symbol space="ram" offset="0x1000" name="Caller"/>
+<symbol space="ram" offset="0x1200" name="Overlay"/>
+</binaryimage>
+<script>
+<com>parse line extern int4 Caller(int4 *a);</com>
+<com>parse line extern int4 Overlay(int4 *a);</com>
+<com>option inline Overlay</com>
+<com>lo fu Caller</com>
+<com>decompile</com>
+<com>print C</com>
+<com>quit</com>
+</script>
+<stringmatch name="Repeated first stores" min="2" max="2">a\[1\] = [34];</stringmatch>
+<stringmatch name="Repeated second stores" min="2" max="2">a\[3\] = [34];</stringmatch>
+<stringmatch name="Repeated first condition" min="1" max="1">if \(\*a == 0\)</stringmatch>
+<stringmatch name="Repeated second condition" min="1" max="1">if \(a\[2\] == 0\)</stringmatch>
+<stringmatch name="Repeated returns sum" min="1" max="1">return a\[1\] \+ a\[3\];</stringmatch>
+<stringmatch name="Repeated no remaining helper" min="0" max="0">Overlay\(</stringmatch>
+<stringmatch name="Repeated no rejection" min="0" max="0">Could not inline here|prevents inlining</stringmatch>
+</decompilertest>

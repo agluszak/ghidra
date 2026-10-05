@@ -449,7 +449,8 @@ JumpTable *Funcdata::linkJumpTable(PcodeOp *op)
 
   for(iter=jumpvec.begin();iter!=jumpvec.end();++iter) {
     jt = *iter;
-    if (jt->getOpAddress() == op->getAddr()) {
+    if (jt->getIndirectOp() == op ||
+        (jt->getIndirectOp() == (PcodeOp *)0 && jt->getOpAddress() == op->getAddr())) {
       jt->setIndirectOp(op);
       return jt;
     }
@@ -468,7 +469,8 @@ JumpTable *Funcdata::findJumpTable(const PcodeOp *op) const
 
   for(iter=jumpvec.begin();iter!=jumpvec.end();++iter) {
     jt = *iter;
-    if (jt->getOpAddress() == op->getAddr()) return jt;
+    if (jt->getIndirectOp() == op ||
+        (jt->getIndirectOp() == (PcodeOp *)0 && jt->getOpAddress() == op->getAddr())) return jt;
   }
   return (JumpTable *)0;
 }

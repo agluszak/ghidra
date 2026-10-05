@@ -2582,7 +2582,7 @@ void JumpTable::switchOver(const FlowInfo &flow)
 
   for(int4 i=0;i<addresstable.size();++i) {
     Address addr = addresstable[i];
-    op = flow.target(addr);
+    op = flow.jumpTarget(indirect,addr,i);
     tmpbl = op->getParent();
     for(pos=0;pos<parent->sizeOut();++pos)
       if (parent->getOut(pos) == tmpbl) break;

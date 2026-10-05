@@ -64,6 +64,8 @@ FlowInfo::FlowInfo(Funcdata &d,PcodeOpBank &o,BlockGraph &b,vector<FuncCallSpecs
   unprocessed = op2->unprocessed; // Clone the flow address information
   addrlist = op2->addrlist;
   visited = op2->visited;
+  inline_branches = op2->inline_branches;
+  inline_fallthrough = op2->inline_fallthrough;
   inline_head = op2->inline_head;
   if (inline_head != (Funcdata *)0) {
     inline_base = op2->inline_base;
@@ -91,6 +93,9 @@ void FlowInfo::clearProperties(void)
 PcodeOp *FlowInfo::fallthruOp(PcodeOp *op) const
 
 {
+  map<SeqNum,SeqNum>::const_iterator cloned = inline_fallthrough.find(op->getSeqNum());
+  if (cloned != inline_fallthrough.end())
+    return obank.findOp(cloned->second);
   PcodeOp *retop;
   list<PcodeOp *>::const_iterator iter = op->getInsertIter();
   ++iter;
@@ -189,6 +194,9 @@ PcodeOp *FlowInfo::findRelTarget(PcodeOp *op,Address &res) const
 PcodeOp *FlowInfo::branchTarget(PcodeOp *op) const
 
 {
+  map<SeqNum,vector<SeqNum> >::const_iterator cloned = inline_branches.find(op->getSeqNum());
+  if (cloned != inline_branches.end())
+    return obank.findOp(cloned->second.front());
   const Address &addr(op->getIn(0)->getAddr());
   if (addr.isConstant()) {	// This is a relative sequence number
     Address res;
@@ -200,12 +208,43 @@ PcodeOp *FlowInfo::branchTarget(PcodeOp *op) const
   return target(addr);	// Otherwise a normal address target
 }
 
-/// Replace any reference to the op being inlined with the first op of the inlined sequence.
-/// \param oldOp is the p-code op being inlined
-/// \param newOp is the first p-code op in the inlined sequence
-void FlowInfo::updateTarget(PcodeOp *oldOp,PcodeOp *newOp)
+/// Resolve a jump-table edge in the expansion containing its indirect branch.
+PcodeOp *FlowInfo::jumpTarget(PcodeOp *op,const Address &addr,int4 index) const
 
 {
+  map<SeqNum,vector<SeqNum> >::const_iterator cloned = inline_branches.find(op->getSeqNum());
+  if (cloned != inline_branches.end())
+    return obank.findOp(cloned->second[index]);
+  return target(addr);
+}
+
+/// Replace any reference to the op being inlined with the first op of the inlined sequence.
+/// \param oldOp is the p-code op being inlined
+/// \param newOp is the first injected op, or NULL for an empty injection
+/// \param lastOp is the last injected op when the injection falls through
+void FlowInfo::updateTarget(PcodeOp *oldOp,PcodeOp *newOp,PcodeOp *lastOp)
+
+{
+  if (newOp == (PcodeOp *)0) {
+    newOp = fallthruOp(oldOp); // An empty injection bypasses the call.
+    if (newOp == (PcodeOp *)0)
+      throw LowlevelError("No continuation for empty inlining");
+  }
+  // A fall-through injection inherits the replaced operation's continuation.
+  map<SeqNum,SeqNum>::const_iterator continuation = inline_fallthrough.find(oldOp->getSeqNum());
+  if (lastOp != (PcodeOp *)0 && continuation != inline_fallthrough.end())
+    inline_fallthrough[lastOp->getSeqNum()] = continuation->second;
+  // Injection replaces an operation without changing its incoming edges.
+  const SeqNum &oldseq = oldOp->getSeqNum();
+  const SeqNum &newseq = newOp->getSeqNum();
+  for(map<SeqNum,vector<SeqNum> >::iterator it=inline_branches.begin();it!=inline_branches.end();++it) {
+    for(int4 i=0;i<it->second.size();++i)
+      if (it->second[i] == oldseq) it->second[i] = newseq;
+  }
+  for(map<SeqNum,SeqNum>::iterator it=inline_fallthrough.begin();it!=inline_fallthrough.end();++it)
+    if (it->second == oldseq) it->second = newseq;
+  inline_branches.erase(oldseq);
+  inline_fallthrough.erase(oldseq);
   map<Address,VisitStat>::iterator viter = visited.find(oldOp->getAddr());
   if (viter != visited.end()) {				// Check if -oldOp- is a possible branch target
     if ((*viter).second.seqnum == oldOp->getSeqNum())	// (if injection op is the first op for its address)
@@ -336,11 +375,11 @@ PcodeOp *FlowInfo::xrefControlFlow(list<PcodeOp *>::const_iterator oiter,bool &s
       startbasic = true;
       break;
     case CPUI_CALL:
-      if (setupCallSpecs(op,fc))
+      if (checkForFlowModification(*setupCallSpecs(op,fc)))
 	--oiter;		// Backup one op, to pickup halt
       break;
     case CPUI_CALLIND:
-      if (setupCallindSpecs(op,fc))
+      if (checkForFlowModification(*setupCallindSpecs(op,fc)))
 	--oiter;		// Backup one op, to pickup halt
       break;
     case CPUI_CALLOTHER:
@@ -691,8 +730,8 @@ void FlowInfo::queryCall(FuncCallSpecs &fspecs)
 /// Any overriding prototype or control-flow is examined and applied.
 /// \param op is the given CALL op
 /// \param fc is non-NULL if \e injection is in progress and a cycle check needs to be made
-/// \return \b true if it is discovered the sub-function never returns
-bool FlowInfo::setupCallSpecs(PcodeOp *op,FuncCallSpecs *fc)
+/// \return the call specification (flow effects are applied separately)
+FuncCallSpecs *FlowInfo::setupCallSpecs(PcodeOp *op,FuncCallSpecs *fc)
 
 {
   FuncCallSpecs *res;
@@ -706,7 +745,7 @@ bool FlowInfo::setupCallSpecs(PcodeOp *op,FuncCallSpecs *fc)
     if (fc->getEntryAddress() == res->getEntryAddress())
       res->cancelInjectId();		// Don't allow recursion
   }
-  return checkForFlowModification(*res);
+  return res;
 }
 
 /// \brief Set up the FuncCallSpecs object for a new indirect call site
@@ -715,8 +754,8 @@ bool FlowInfo::setupCallSpecs(PcodeOp *op,FuncCallSpecs *fc)
 /// the CALLIND op at the site. Any overriding prototype or control-flow may be examined and applied.
 /// \param op is the given CALLIND op
 /// \param fc is non-NULL if \e injection is in progress and a cycle check needs to be made
-/// \return \b true if it is discovered the sub-function never returns
-bool FlowInfo::setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc)
+/// \return the call specification (flow effects are applied separately)
+FuncCallSpecs *FlowInfo::setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc)
 
 {
   FuncCallSpecs *res;
@@ -734,7 +773,7 @@ bool FlowInfo::setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc)
     data.opSetOpcode(op,CPUI_CALL); // Set normal opcode
     data.opSetInput(op,data.newVarnodeCallSpecs(res),0);
   }
-  return checkForFlowModification(*res);
+  return res;
 }
 
 /// \param op is the BRANCHIND operation to convert
@@ -748,8 +787,8 @@ void FlowInfo::truncateIndirectJump(PcodeOp *op,JumpTable::RecoveryMode mode)
   }
   else {
     data.opSetOpcode(op,CPUI_CALLIND); // Turn jump into call
-    setupCallindSpecs(op,(FuncCallSpecs *)0);
-    FuncCallSpecs *fc = data.getCallSpecs(op);
+    FuncCallSpecs *fc = setupCallindSpecs(op,(FuncCallSpecs *)0);
+    checkForFlowModification(*fc);
     uint4 returnType;
     bool noParams;
 
@@ -937,7 +976,7 @@ void FlowInfo::collectEdges(void)
 				// so assume there are no branches out
       num = jt->numEntries();
       for(i=0;i<num;++i) {
-	targ_op = target(jt->getAddressByIndex(i));
+	targ_op = jumpTarget(op,jt->getAddressByIndex(i),i);
 	if (targ_op->isMark()) continue; // Already a link between these blocks
 	targ_op->setMark();
 	block_edge1.push_back(op);
@@ -1052,49 +1091,72 @@ void FlowInfo::forwardRecursion(const FlowInfo &op2)
 void FlowInfo::xrefInlinedBranch(PcodeOp *op)
 
 {
+  FuncCallSpecs *fc = (FuncCallSpecs *)0;
   if (op->code() == CPUI_CALL)
-    setupCallSpecs(op,(FuncCallSpecs *)0);
+    fc = setupCallSpecs(op,(FuncCallSpecs *)0);
   else if (op->code() == CPUI_CALLIND)
-    setupCallindSpecs(op,(FuncCallSpecs *)0);
+    fc = setupCallindSpecs(op,(FuncCallSpecs *)0);
   else if (op->code() == CPUI_BRANCHIND) {
     JumpTable *jt = data.linkJumpTable(op);
     if (jt == (JumpTable *)0 || jt->numEntries() == 0)
-      tablelist.push_back(op); // Didn't recover a jumptable
+      tablelist.push_back(op);
   }
+  // The source flow already contains any no-return halt. Adding another
+  // during cloning would overwrite the next source operation's sequence id.
+  if (fc != (FuncCallSpecs *)0 && fc->isInline())
+    injectlist.push_back(op);
 }
 
 /// \brief Clone the given in-line flow into \b this flow using the \e hard model
 ///
 /// Individual PcodeOps from the Funcdata being in-lined are cloned into
 /// the Funcdata for \b this flow, preserving their original address.
-/// Any RETURN op is replaced with jump to first address following the call site.
+/// Normal RETURN ops jump to the caller continuation; artificial halts are preserved.
 /// \param inlineflow is the given in-line flow to clone
-/// \param retaddr is the first address after the call site in \b this flow
-void FlowInfo::inlineClone(const FlowInfo &inlineflow,const Address &retaddr)
+/// \param retop is the continuation operation, or NULL for a tail call
+/// \param callop is the call being expanded
+void FlowInfo::inlineClone(const FlowInfo &inlineflow,PcodeOp *retop,PcodeOp *callop)
 
 {
+  // Sequence numbers distinguish copies while instruction addresses retain
+  // their provenance. Resolve every edge in the source flow before merging it.
   list<PcodeOp *>::const_iterator iter;
   for(iter=inlineflow.data.beginOpDead();iter!=inlineflow.data.endOpDead();++iter) {
     PcodeOp *op = *iter;
     PcodeOp *cloneop;
-    if ((op->code() == CPUI_RETURN)&&(!retaddr.isInvalid())) {
+    if (op->code() == CPUI_RETURN && retop != (PcodeOp *)0 && op->getHaltType() == 0) {
       cloneop = data.newOp(1,op->getSeqNum());
       data.opSetOpcode(cloneop,CPUI_BRANCH);
-      Varnode *vn = data.newCodeRef(retaddr);
-      data.opSetInput(cloneop,vn,0);
+      data.opSetInput(cloneop,data.newCodeRef(retop->getAddr()),0);
+      inline_branches[cloneop->getSeqNum()].push_back(retop->getSeqNum());
     }
-    else
+    else {
       cloneop = data.cloneOp(op,op->getSeqNum());
+      if (op->getHaltType() != 0)
+        data.opMarkHalt(cloneop,op->getHaltType());
+      if (op->code() == CPUI_BRANCH || op->code() == CPUI_CBRANCH)
+        inline_branches[cloneop->getSeqNum()].push_back(inlineflow.branchTarget(op)->getSeqNum());
+      else if (op->code() == CPUI_BRANCHIND) {
+        JumpTable *jt = inlineflow.data.findJumpTable(op);
+        if (jt != (JumpTable *)0) {
+          vector<SeqNum> &targets = inline_branches[cloneop->getSeqNum()];
+          for(int4 i=0;i<jt->numEntries();++i)
+            targets.push_back(inlineflow.jumpTarget(op,jt->getAddressByIndex(i),i)->getSeqNum());
+        }
+      }
+      if (op->code() != CPUI_BRANCH && op->code() != CPUI_BRANCHIND && op->code() != CPUI_RETURN) {
+        PcodeOp *nextop = inlineflow.fallthruOp(op);
+        if (nextop != (PcodeOp *)0)
+          inline_fallthrough.insert(make_pair(cloneop->getSeqNum(),nextop->getSeqNum()));
+      }
+    }
     if (cloneop->isCallOrBranch())
       xrefInlinedBranch(cloneop);
   }
-  // Copy in the cross-referencing
-  unprocessed.insert(unprocessed.end(),inlineflow.unprocessed.begin(),
-		     inlineflow.unprocessed.end());
-  addrlist.insert(addrlist.end(),inlineflow.addrlist.begin(),
-		  inlineflow.addrlist.end());
+  inline_branches[callop->getSeqNum()].push_back(inlineflow.target(inlineflow.data.getAddress())->getSeqNum());
+  unprocessed.insert(unprocessed.end(),inlineflow.unprocessed.begin(),inlineflow.unprocessed.end());
+  addrlist.insert(addrlist.end(),inlineflow.addrlist.begin(),inlineflow.addrlist.end());
   visited.insert(inlineflow.visited.begin(),inlineflow.visited.end());
-  // We don't copy inline_recursion or inline_head here
 }
 
 /// \brief Clone the given in-line flow into \b this flow using the EZ model
@@ -1118,20 +1180,19 @@ void FlowInfo::inlineEZClone(const FlowInfo &inlineflow,const Address &calladdr)
   // address, we don't touch unprocessed, addrlist, or visited
 }
 
-/// \brief For in-lining using the \e hard model, make sure some restrictions are met
+/// \brief Find the caller continuation for a hard inline expansion
 ///
-///   - Can only in-line the function once.
-///   - There must be a p-code op to return to.
-///   - There must be a distinct return address, so that the RETURN can be replaced with a BRANCH.
-///
-/// Pass back the distinct return address, unless the in-lined function doesn't return.
-/// \param inlinefd is the function being in-lined into \b this flow
-/// \param op is CALL instruction at the site of the in-line
-/// \param retaddr holds the passed back return address
-/// \return \b true if all the \e hard model restrictions are met
-bool FlowInfo::testHardInlineRestrictions(Funcdata *inlinefd,PcodeOp *op,Address &retaddr)
+/// A returning function needs a continuation operation. A tail-call override
+/// has a synthetic RETURN instead, which is removed so callee returns survive.
+/// Sequence numbers distinguish continuations within the same instruction.
+/// \param inlinefd is the function being in-lined
+/// \param op is the CALL at the in-line site
+/// \param retop receives the continuation, or NULL for terminal expansion
+/// \return true if the continuation is available
+bool FlowInfo::prepareInlineContinuation(Funcdata *inlinefd,PcodeOp *op,PcodeOp *&retop)
 
 {
+  retop = (PcodeOp *)0;
   if (!inlinefd->getFuncProto().isNoReturn()) {
     // Raw ops are not necessarily in instruction order: a previously
     // visited continuation may precede this call in the bank.
@@ -1143,7 +1204,7 @@ bool FlowInfo::testHardInlineRestrictions(Funcdata *inlinefd,PcodeOp *op,Address
       // No translated continuation at the instruction's fall-through.
     }
     if (nextop == (PcodeOp *)0) {
-      inline_head->warning("No fallthrough prevents inlining here",op->getAddr());
+      warningInline("No fallthrough prevents inlining here","no-fallthrough",inlinefd,op);
       return false;
     }
     // CALL_RETURN overrides model a tail jump with a synthetic return at
@@ -1156,14 +1217,10 @@ bool FlowInfo::testHardInlineRestrictions(Funcdata *inlinefd,PcodeOp *op,Address
       // The converted call is now a terminal BRANCH. Remove the synthetic
       // return: retaining it adds an unreachable return to the caller CFG.
       data.opDestroyRaw(nextop);
-      retaddr = Address();
+      inline_fallthrough.erase(op->getSeqNum());
       return true;
     }
-    retaddr = nextop->getAddr();
-    if (op->getAddr() == retaddr) {
-      inline_head->warning("Return address prevents inlining here",op->getAddr());
-      return false;
-    }
+    retop = nextop;
     // If the inlining "jumps back" this starts a new basic block
     data.opMarkStartBasic(nextop);
   }
@@ -1220,7 +1277,7 @@ void FlowInfo::doInjection(InjectPayload *payload,InjectContext &icontext,PcodeO
     obank.markIncidentalCopy(firstop, lastop);
   obank.moveSequenceDead(firstop,lastop,op); // Move the injection to right after the call
 
-  updateTarget(op,firstop);		// Replace -op- with -firstop- in the target map
+  updateTarget(op,firstop,isfallthru ? lastop : (PcodeOp *)0); // Preserve clone-specific edges
   // Get rid of the original call
   data.opDestroyRaw(op);
 }
@@ -1253,6 +1310,16 @@ void FlowInfo::injectUserOp(PcodeOp *op)
   doInjection(payload,icontext,op,(FuncCallSpecs *)0);
 }
 
+/// Include the callee identity so clients can group incomplete expansions.
+void FlowInfo::warningInline(const string &message,const string &reason,Funcdata *fd,PcodeOp *op)
+
+{
+  ostringstream text;
+  text << message << " [inline callee=0x" << hex << fd->getAddress().getOffset()
+       << " reason=" << reason << ']';
+  inline_head->warning(text.str(),op->getAddr());
+}
+
 /// P-code is generated for the sub-function and then woven into \b this flow
 /// at the call site.
 /// \param fc is the given call site
@@ -1271,22 +1338,15 @@ bool FlowInfo::inlineSubFunction(FuncCallSpecs *fc)
   inline_recursion->insert(data.getAddress()); // Insert current function
   if (inline_recursion->find( fd->getAddress() ) != inline_recursion->end()) {
     // This function has already been included with current inlining
-    inline_head->warning("Could not inline here",fc->getOp()->getAddr());
+    warningInline("Could not inline here","recursive-call",fd,fc->getOp());
     return false;
   }
 
+  inline_recursion->insert(fd->getAddress());
   int4 res = data.inlineFlow( fd, *this, fc->getOp());
+  inline_recursion->erase(fd->getAddress());
   if (res < 0)
     return false;
-  else if (res == 0) {	// easy model
-    // Remove inlined function from list so it can be inlined again, even if it also inlines
-    inline_recursion->erase(fd->getAddress());
-  }
-  else if (res == 1) {	// hard model
-    // Add inlined function to recursion list, even if it contains no inlined calls,
-    // to prevent parent from inlining it twice
-    inline_recursion->insert(fd->getAddress());
-  }
 
   // Changing CALL to JUMP may make some original code unreachable
   setPossibleUnreachable();

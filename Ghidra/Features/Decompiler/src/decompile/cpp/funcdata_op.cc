@@ -882,16 +882,18 @@ int4 Funcdata::inlineFlow(Funcdata *inlinefd,FlowInfo &flow,PcodeOp *callop)
       obank.moveSequenceDead(firstop,lastop,callop); // Move cloned sequence to right after callop
       if (callop->isBlockStart()) {
 	firstop->setFlag(PcodeOp::startbasic); // First op of inline inherits callop's startbasic flag
-	flow.updateTarget(callop, firstop);
       }
       else
 	firstop->clearFlag(PcodeOp::startbasic);
+      flow.updateTarget(callop,firstop,lastop);
     }
+    else
+      flow.updateTarget(callop,(PcodeOp *)0);
     opDestroyRaw(callop);
   }
   else {
-    Address retaddr;
-    if (!flow.testHardInlineRestrictions(inlinefd,callop,retaddr))
+    PcodeOp *retop;
+    if (!flow.prepareInlineContinuation(inlinefd,callop,retop))
       return -1;
     res = 1;
     vector<JumpTable *>::const_iterator jiter; // Clone any jumptables from inline piece
@@ -899,7 +901,7 @@ int4 Funcdata::inlineFlow(Funcdata *inlinefd,FlowInfo &flow,PcodeOp *callop)
       JumpTable *jtclone = new JumpTable(*jiter);
       jumpvec.push_back(jtclone);
     }
-    flow.inlineClone(inlineflow,retaddr);
+    flow.inlineClone(inlineflow,retop,callop);
 
     // Convert CALL op to a jump
     while(callop->numInput()>1)
@@ -910,7 +912,8 @@ int4 Funcdata::inlineFlow(Funcdata *inlinefd,FlowInfo &flow,PcodeOp *callop)
     opSetInput(callop,inlineaddr,0);
   }
 
-  obank.setUniqId( inlinefd->obank.getUniqId() );
+  // Never reuse ids allocated while incorporating the cloned flow.
+  obank.setUniqId( max(obank.getUniqId(),inlinefd->obank.getUniqId()) );
   
   return res;
 }

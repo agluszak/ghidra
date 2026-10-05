@@ -1,0 +1,24 @@
+<decompilertest>
+<binaryimage arch="x86:LE:32:default:windows">
+<!-- Authored fixture: two branching calls write distinct slots in one array. -->
+<bytechunk space="ram" offset="0x1000" readonly="true">568b74240856e8f501000083c4048d460850e8e901000083c4048b460403460c5ec3</bytechunk>
+<bytechunk space="ram" offset="0x1200" readonly="true">8b4424048b0885c97406ff40044975fac3</bytechunk>
+<symbol space="ram" offset="0x1000" name="Caller"/>
+<symbol space="ram" offset="0x1200" name="Overlay"/>
+</binaryimage>
+<script>
+<com>parse line extern int4 Caller(int4 *a);</com>
+<com>parse line extern int4 Overlay(int4 *a);</com>
+<com>option inline Overlay</com>
+<com>lo fu Caller</com>
+<com>decompile</com>
+<com>print C</com>
+<com>quit</com>
+</script>
+<stringmatch name="Repeated first loop store" min="1" max="1">a\[1\] = a\[1\] \+ 1;</stringmatch>
+<stringmatch name="Repeated second loop store" min="1" max="1">a\[3\] = a\[3\] \+ 1;</stringmatch>
+<stringmatch name="Repeated both loops" min="2" max="2">while \(|for \(</stringmatch>
+<stringmatch name="Repeated loop returns sum" min="1" max="1">return a\[1\] \+ a\[3\];</stringmatch>
+<stringmatch name="Repeated loop no helper" min="0" max="0">Overlay\(</stringmatch>
+<stringmatch name="Repeated loop no rejection" min="0" max="0">Could not inline here|prevents inlining</stringmatch>
+</decompilertest>

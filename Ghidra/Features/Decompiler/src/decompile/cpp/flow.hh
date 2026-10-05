@@ -89,6 +89,8 @@ private:
   vector<Address> addrlist;		///< Addresses to which there is flow
   vector<PcodeOp *> tablelist;		///< List of BRANCHIND ops (preparing for jump table recovery)
   vector<PcodeOp *> injectlist;		///< List of p-code ops that need injection
+  map<SeqNum,vector<SeqNum> > inline_branches; ///< Clone-specific branch destinations
+  map<SeqNum,SeqNum> inline_fallthrough; ///< Clone-specific continuations
   map<Address,VisitStat> visited;	///< Map of machine instructions that have been visited so far
   list<PcodeOp *> block_edge1;		///< Source p-code op (Edges between basic blocks)
   list<PcodeOp *> block_edge2;		///< Destination p-code op (Edges between basic blocks)
@@ -129,11 +131,12 @@ private:
   void reinterpreted(const Address &addr);		///< Generate warning message or exception for a \e reinterpreted address
   bool checkForFlowModification(FuncCallSpecs &fspecs);
   void queryCall(FuncCallSpecs &fspecs);		///< Try to recover the Funcdata object corresponding to a given call
-  bool setupCallSpecs(PcodeOp *op,FuncCallSpecs *fc);	///< Set up the FuncCallSpecs object for a new call site
-  bool setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc);
+  FuncCallSpecs *setupCallSpecs(PcodeOp *op,FuncCallSpecs *fc);	///< Set up the FuncCallSpecs object for a new call site
+  FuncCallSpecs *setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc);
   void xrefInlinedBranch(PcodeOp *op);			///< Check for control-flow in a new injected p-code op
   void doInjection(InjectPayload *payload,InjectContext &icontext,PcodeOp *op,FuncCallSpecs *fc);
   void injectUserOp(PcodeOp *op);			///< Perform \e injection for a given user-defined p-code op
+  void warningInline(const string &message,const string &reason,Funcdata *fd,PcodeOp *op);
   bool inlineSubFunction(FuncCallSpecs *fc);		///< In-line the sub-function at the given call site
   bool injectSubFunction(FuncCallSpecs *fc);		///< Perform \e injection replacing the CALL at the given call site
   void checkContainedCall(void);
@@ -150,14 +153,15 @@ public:
   void clearFlags(uint4 val) { flags &= ~val; }	///< Disable a specific option
   PcodeOp *target(const Address &addr) const;	///< Return first p-code op for instruction at given address
   PcodeOp *branchTarget(PcodeOp *op) const;	///< Find the target referred to by a given BRANCH or CBRANCH
-  void updateTarget(PcodeOp *oldOp,PcodeOp *newOp);	///< Update the branch target for an inlined p-code op
+  PcodeOp *jumpTarget(PcodeOp *op,const Address &addr,int4 index) const; ///< Clone-specific switch target
+  void updateTarget(PcodeOp *oldOp,PcodeOp *newOp,PcodeOp *lastOp=(PcodeOp *)0);	///< Update the branch target for an inlined p-code op
   void generateOps(void);			///< Generate raw control-flow from the function's base address
   void generateBlocks(void);			///< Generate basic blocks from the raw control-flow
-  bool testHardInlineRestrictions(Funcdata *inlinefd,PcodeOp *op,Address &retaddr);
+  bool prepareInlineContinuation(Funcdata *inlinefd,PcodeOp *op,PcodeOp *&retop);
   bool checkEZModel(void) const;		///< Check if \b this flow matches the EX in-lining model
   void injectPcode(void);			///< Perform substitution on any op that requires \e injection
   void forwardRecursion(const FlowInfo &op2);	///< Pull in-lining recursion information from another flow
-  void inlineClone(const FlowInfo &inlineflow,const Address &retaddr);
+  void inlineClone(const FlowInfo &inlineflow,PcodeOp *retop,PcodeOp *callop);
   void inlineEZClone(const FlowInfo &inlineflow,const Address &calladdr);
   int4 getSize(void) const { return (int4)(maxaddr.getOffset() - minaddr.getOffset()); }	///< Get the number of bytes covered by the flow
   bool hasInject(void) const { return !injectlist.empty(); }		///< Does \b this flow have injections
