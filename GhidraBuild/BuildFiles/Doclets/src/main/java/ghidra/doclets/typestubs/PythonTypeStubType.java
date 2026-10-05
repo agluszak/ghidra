@@ -294,6 +294,11 @@ class PythonTypeStubType extends PythonTypeStubElement<TypeElement> {
 	 */
 	void printField(VariableElement field, PrintWriter printer, String indent, boolean isStatic) {
 		String name = sanitize(field.getSimpleName());
+		// JPype exposes Java names containing '$' through getattr, not dotted access.
+		// Do not emit invalid Python or invent an attribute alias that does not exist.
+		if (name.indexOf('$') >= 0) {
+			return;
+		}
 		printer.print(indent);
 		printer.print(name);
 

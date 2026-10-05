@@ -36,7 +36,7 @@ jobs:
         run: printf '\napplication.fork.revision=%s\n' "$GITHUB_SHA" >> Ghidra/application.properties
 
       - name: Build Ghidra
-        run: ./gradlew buildGhidra --parallel
+        run: ./gradlew :Doclets:test buildGhidra --parallel
 
       - name: Publish pinned Linux distribution
         env:
@@ -50,6 +50,15 @@ jobs:
           mkdir -p build/dist/python
           unzip -j build/dist/ghidra-linux.zip '*/Ghidra/Features/PyGhidra/pypkg/dist/pyghidra-*.whl' -d build/dist/python
           unzip -j build/dist/ghidra-linux.zip '*/docs/ghidra_stubs/*.whl' -d build/dist/python
+          python3 - <<'PYTHON'
+          import ast, zipfile
+          from pathlib import Path
+          wheel = next(Path("build/dist/python").glob("ghidra_stubs-*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              for name in archive.namelist():
+                  if name.endswith(".pyi"):
+                      ast.parse(archive.read(name), filename=name)
+          PYTHON
           sha256sum build/dist/ghidra-linux.zip > build/dist/SHA256SUMS
           gh release create "wizardry-$GITHUB_SHA" \
             build/dist/ghidra-linux.zip build/dist/SHA256SUMS build/dist/python/*.whl \
