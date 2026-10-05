@@ -188,6 +188,9 @@ abstract class PythonTypeStubElement<T extends Element> {
 	 * @return the Python safe qualified name
 	 */
 	static String sanitizeQualifiedName(String name) {
+		if (name.indexOf('$') >= 0) {
+			return "typing.Any";
+		}
 		Iterator<String> it = Arrays.stream(name.split("\\."))
 				.map(PythonTypeStubElement::sanitize)
 				.iterator();
@@ -265,6 +268,10 @@ abstract class PythonTypeStubElement<T extends Element> {
 	static final String sanitizeQualifiedName(TypeMirror type, PackageElement pkg) {
 		if (type instanceof DeclaredType dt) {
 			TypeElement el = (TypeElement) dt.asElement();
+			// A Java-only type has no name usable in a Python type expression.
+			if (el.getQualifiedName().toString().indexOf('$') >= 0) {
+				return "typing.Any";
+			}
 			PackageElement typePkg = getPackage(el);
 
 			String name;

@@ -258,6 +258,9 @@ class PythonTypeStubType extends PythonTypeStubElement<TypeElement> {
 	 * @param indent the current indentation
 	 */
 	final void printClass(PrintWriter printer, String indent) {
+		if (el.getSimpleName().toString().indexOf('$') >= 0) {
+			return;
+		}
 		printClassDefinition(printer, indent);
 		indent = indent(indent);
 		for (PythonTypeStubNestedType nested : getNestedTypes()) {

@@ -122,6 +122,9 @@ final class PythonTypeStubMethod extends PythonTypeStubElement<ExecutableElement
 	 */
 	void process(PrintWriter printer, String indent, boolean overload) {
 		String name = sanitize(getName());
+		if (name.indexOf('$') >= 0) {
+			return;
+		}
 		Set<Modifier> modifiers = el.getModifiers();
 		boolean isStatic = modifiers.contains(Modifier.STATIC);
 

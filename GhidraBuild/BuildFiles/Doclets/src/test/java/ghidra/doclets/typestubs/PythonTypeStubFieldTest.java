@@ -32,11 +32,14 @@ public class PythonTypeStubFieldTest {
 			Path source = root.resolve("Fields.java");
 			Files.writeString(source, """
 				package fixture;
-				public class Fields {
+				public class Fields extends Fields$Shared {
 					public static final int VALID = 1;
 					public static final int INVALID$FIELD = 2;
 					public static final int from = 3;
+					public static int layout$() { return 4; }
+					public static Fields$Shared shared() { return null; }
 				}
+				class Fields$Shared {}
 				""");
 			DocumentationTool tool = ToolProvider.getSystemDocumentationTool();
 			try (StandardJavaFileManager files = tool.getStandardFileManager(null, null, null)) {
@@ -50,6 +53,10 @@ public class PythonTypeStubFieldTest {
 			assertTrue(stub.contains("from_: typing.Final = 3"));
 			assertFalse(stub.contains("INVALID$FIELD"));
 			assertFalse(stub.contains("INVALID_FIELD"));
+			assertFalse(stub.contains("def layout$"));
+			assertFalse(stub.contains("class Fields$Shared"));
+			assertTrue(stub.contains("class Fields(typing.Any)"));
+			assertTrue(stub.contains("-> typing.Any:"));
 		}
 		finally {
 			try (var paths = Files.walk(root)) {
