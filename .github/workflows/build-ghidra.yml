@@ -32,6 +32,9 @@ jobs:
       - name: Fetch Dependencies
         run: ./gradlew -I gradle/support/fetchDependencies.gradle -DhideDownloadProgress -DnoEclipse
 
+      - name: Stamp fork revision
+        run: printf '\napplication.fork.revision=%s\n' "$GITHUB_SHA" >> Ghidra/application.properties
+
       - name: Build Ghidra
         run: ./gradlew buildGhidra --parallel
 
