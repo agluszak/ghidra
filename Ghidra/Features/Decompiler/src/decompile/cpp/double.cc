@@ -1364,10 +1364,29 @@ void SplitVarnode::replaceIndirectOp(Funcdata &data,SplitVarnode &out,SplitVarno
   out.createJoinedWhole(data);
 
   in.findCreateWhole(data);
-  PcodeOp *newop = data.newIndirect(affector);
-  data.opSetOutput(newop,out.getWhole());
-  data.opSetInput(newop,in.getWhole(),0);
-  data.opInsertBefore(newop,affector);
+  // Different pairs of SUBPIECEs can describe the same indirect effect.  Reuse
+  // its whole value instead of creating overlapping address-tied definitions.
+  PcodeOp *newop = (PcodeOp *)0;
+  for(auto iter=in.getWhole()->beginDescend();iter!=in.getWhole()->endDescend();++iter) {
+    PcodeOp *candidate = *iter;
+    if (candidate->code() != CPUI_INDIRECT || candidate->isIndirectCreation()) continue;
+    if (candidate->getIn(0) != in.getWhole()) continue;
+    if (PcodeOp::getOpFromConst(candidate->getIn(1)->getAddr()) != affector) continue;
+    Varnode *value = candidate->getOut();
+    if (value->getSize() != out.getSize() || value->getAddr() != out.getWhole()->getAddr()) continue;
+    newop = candidate;
+    break;
+  }
+  if (newop != (PcodeOp *)0) {
+    data.deleteVarnode(out.whole);
+    out.whole = newop->getOut();
+  }
+  else {
+    newop = data.newIndirect(affector);
+    data.opSetOutput(newop,out.getWhole());
+    data.opSetInput(newop,in.getWhole(),0);
+    data.opInsertBefore(newop,affector);
+  }
   out.buildLoFromWhole(data);
   out.buildHiFromWhole(data);
 }
