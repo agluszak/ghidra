@@ -16,6 +16,7 @@
 #include "jumptable.hh"
 #include "emulate.hh"
 #include "flow.hh"
+#include "rangeutil.hh"
 
 namespace ghidra {
 
@@ -1253,6 +1254,25 @@ void JumpBasic::findNormalized(Funcdata *fd,BlockBasic *rootbl,int4 pathout,cons
 
   analyzeGuards(rootbl,pathout);
   findSmallestNormal(dynamic_cast<const JumpBasic *>(previous));
+  Varnode *normal = pathMeld.getVarnode(varnodeIndex);
+  if (normal->isWritten() && normal->getDef()->code() == CPUI_MULTIEQUAL) {
+    // A preceding switch can merge constants with a guarded dynamic arm.
+    // Its guard no longer dominates the merged block, and the NZ mask alone
+    // rounds the possible values up to a power of two. Use the existing
+    // value-set analysis to retain bounds on every incoming arm.
+    vector<Varnode *> sinks(1,normal);
+    vector<PcodeOp *> reads;
+    ValueSetSolver solver;
+    solver.establishValueSets(sinks,reads,(Varnode *)0,false);
+    WidenerFull widener;
+    const int4 maxIterations = 10000;
+    solver.solve(maxIterations,widener);
+    if (solver.getNumIterations() <= maxIterations && normal->getValueSet()->getTypeCode() == 0) {
+      CircleRange refined(jrange->getRange());
+      if (refined.intersect(normal->getValueSet()->getRange()) == 0 && !refined.isEmpty())
+        jrange->setRange(refined,normal,pathMeld.getEarliestOp(varnodeIndex));
+    }
+  }
   sz = jrange->getSize();
   if ((sz > maxtablesize)&&(pathMeld.numCommonVarnode()==1)) {
     // Check for jump through readonly variable

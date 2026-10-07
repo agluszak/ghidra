@@ -1,0 +1,29 @@
+<decompilertest>
+<binaryimage arch="x86:LE:32:default:windows">
+<!-- Authored fixture: repeated inline expansions end in an unresolved indirect
+     tail jump. Each indirect call must return to its caller continuation. -->
+<bytechunk space="ram" offset="0x1000" readonly="true">ff742404e8f700000083c404c3</bytechunk>
+<bytechunk space="ram" offset="0x1100" readonly="true">568b74240856e8f500000083c4048d460850e8e900000083c4048b460403460c5ec3</bytechunk>
+<bytechunk space="ram" offset="0x1200" readonly="true">8b442404c74004030000008b00ff20</bytechunk>
+<symbol space="ram" offset="0x1000" name="Caller"/>
+<symbol space="ram" offset="0x1100" name="Wrapper"/>
+<symbol space="ram" offset="0x1200" name="Overlay"/>
+</binaryimage>
+<script>
+<com>parse line extern int4 Caller(int4 *a);</com>
+<com>parse line extern int4 Overlay(int4 *a);</com>
+<com>parse line extern int4 Wrapper(int4 *a);</com>
+<com>option inline Wrapper</com>
+<com>option inline Overlay</com>
+<com>lo fu Caller</com>
+<com>decompile</com>
+<com>print C</com>
+<com>quit</com>
+</script>
+<stringmatch name="Nested indirect tail first stores" min="1" max="1">a\[1\] = 3;</stringmatch>
+<stringmatch name="Nested indirect tail second stores" min="1" max="1">a\[3\] = 3;</stringmatch>
+<stringmatch name="Nested indirect tail no helper" min="0" max="0">Overlay\(|Wrapper\(</stringmatch>
+<stringmatch name="Nested indirect tail returns sum" min="1" max="1">return a\[1\] \+ a\[3\];</stringmatch>
+<stringmatch name="Nested indirect tail no rejection" min="0" max="0">Could not inline here|prevents inlining|Bad partial clone</stringmatch>
+<stringmatch name="Nested indirect tail both calls" min="2" max="2">\(\*\*\(code \*\*\)</stringmatch>
+</decompilertest>

@@ -103,6 +103,7 @@ void Funcdata::clear(void)
   vbank.clear();
   clearCallSpecs();
   clearJumpTables();
+  unreachableJumpTables.clear();
   // Do not clear overrides
   heritage.clear();
   covermerge.clear();

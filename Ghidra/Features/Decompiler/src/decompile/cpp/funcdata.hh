@@ -88,6 +88,7 @@ class Funcdata {
 
   vector<FuncCallSpecs *> qlst;	///< List of calls this function makes
   vector<JumpTable *> jumpvec;	///< List of jump-tables for this function
+  set<SeqNum> unreachableJumpTables; ///< Indirect branches removed from a partial recovery clone
 
   VarnodeBank vbank;		///< Container of Varnode objects for \b this function
   PcodeOpBank obank;		///< Container of PcodeOp objects for \b this function

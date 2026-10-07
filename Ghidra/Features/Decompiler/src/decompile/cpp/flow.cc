@@ -816,9 +816,20 @@ void FlowInfo::truncateIndirectJump(PcodeOp *op,JumpTable::RecoveryMode mode)
       }
     }
 
-    // Create an artificial return
-    PcodeOp *truncop = artificialHalt(op->getAddr(),returnType);
+    // Return from an inlined tail call to that expansion's continuation.
+    // Terminal expansions and non-returning calls retain the artificial halt.
+    PcodeOp *truncop;
+    map<SeqNum,SeqNum>::const_iterator continuation = inline_fallthrough.find(op->getSeqNum());
+    if (returnType == 0 && continuation != inline_fallthrough.end()) {
+      truncop = data.newOp(1,op->getAddr());
+      data.opSetOpcode(truncop,CPUI_BRANCH);
+      data.opSetInput(truncop,data.newCodeRef(continuation->second.getAddr()),0);
+      inline_branches[truncop->getSeqNum()].push_back(continuation->second);
+    }
+    else
+      truncop = artificialHalt(op->getAddr(),returnType);
     data.opDeadInsertAfter(truncop,op);
+    inline_fallthrough[op->getSeqNum()] = truncop->getSeqNum();
   }
 }
 
@@ -1138,10 +1149,19 @@ void FlowInfo::inlineClone(const FlowInfo &inlineflow,PcodeOp *retop,PcodeOp *ca
         inline_branches[cloneop->getSeqNum()].push_back(inlineflow.branchTarget(op)->getSeqNum());
       else if (op->code() == CPUI_BRANCHIND) {
         JumpTable *jt = inlineflow.data.findJumpTable(op);
-        if (jt != (JumpTable *)0) {
+        if (jt != (JumpTable *)0 && jt->numEntries() != 0) {
           vector<SeqNum> &targets = inline_branches[cloneop->getSeqNum()];
           for(int4 i=0;i<jt->numEntries();++i)
             targets.push_back(inlineflow.jumpTarget(op,jt->getAddressByIndex(i),i)->getSeqNum());
+        }
+        else {
+          // An unresolved tail jump may later be converted to CALLIND plus
+          // return. That return belongs to this expansion, not its caller.
+          map<SeqNum,SeqNum>::const_iterator continuation = inlineflow.inline_fallthrough.find(op->getSeqNum());
+          if (continuation != inlineflow.inline_fallthrough.end())
+            inline_fallthrough[cloneop->getSeqNum()] = continuation->second;
+          else if (retop != (PcodeOp *)0)
+            inline_fallthrough[cloneop->getSeqNum()] = retop->getSeqNum();
         }
       }
       if (op->code() != CPUI_BRANCH && op->code() != CPUI_BRANCHIND && op->code() != CPUI_RETURN) {

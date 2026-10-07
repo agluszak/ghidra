@@ -1671,6 +1671,16 @@ bool ValueSet::iterate(Widener &widener)
     leftIsStable = inSet1->leftIsStable;
     rightIsStable = inSet1->rightIsStable;
   }
+  else if (opCode == CPUI_INT_AND && (op->getIn(0)->isConstant() || op->getIn(1)->isConstant())) {
+    // Masking is bounded even when the input value set is unknown. The
+    // interval is a conservative hull; holes in a non-contiguous bit mask
+    // are not interpreted as additional possible table-index bits.
+    Varnode *constant = op->getIn(0)->isConstant() ? op->getIn(0) : op->getIn(1);
+    uintb limit = (constant->getOffset() + 1) & calc_mask(vn->getSize());
+    res.setRange(0,limit,vn->getSize(),1);
+    leftIsStable = true;
+    rightIsStable = true;
+  }
   else if (numParams == 2) {
     ValueSet *inSet1 = op->getIn(0)->getValueSet();
     ValueSet *inSet2 = op->getIn(1)->getValueSet();

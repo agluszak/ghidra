@@ -594,6 +594,7 @@ public:
   bool isLabelled(void) const { return !label.empty(); }		///< Return \b true if \e case labels are computed
   bool isOverride(void) const;				///< Return \b true if \b this table was manually overridden
   bool isPartial(void) const { return partialTable; }	///< Return \b true if \b this is a partial table needing more recovery
+  void markPartial(void) { partialTable = true; }	///< Defer recovery until more control-flow is available
   void markComplete(void) { partialTable = false; }	///< Mark whatever is recovered so far as the complete table
   int4 numEntries(void) const { return addresstable.size(); }	///< Return the size of the address table for \b this jump-table
   uintb getSwitchVarConsume(void) const { return switchVarConsume; }	///< Get bits of switch variable consumed by \b this table

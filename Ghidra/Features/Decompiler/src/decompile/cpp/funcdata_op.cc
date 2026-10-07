@@ -908,6 +908,8 @@ int4 Funcdata::inlineFlow(Funcdata *inlinefd,FlowInfo &flow,PcodeOp *callop)
     res = 1;
     vector<JumpTable *>::const_iterator jiter; // Clone any jumptables from inline piece
     for(jiter=inlinefd->jumpvec.begin();jiter!=inlinefd->jumpvec.end();++jiter) {
+      if ((*jiter)->numEntries() == 0)
+        continue; // Deferred unreachable flow is recovered in the caller
       JumpTable *jtclone = new JumpTable(*jiter);
       jumpvec.push_back(jtclone);
     }

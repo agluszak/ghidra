@@ -140,3 +140,6 @@ src/decompile/datatests/inline-repeated-tail.xml||GHIDRA||||END|
 src/decompile/datatests/inline-repeated-switch.xml||GHIDRA||||END|
 src/decompile/datatests/inline-nested-switch.xml||GHIDRA||||END|
 src/decompile/datatests/inline-repeated-noreturn.xml||GHIDRA||||END|
+src/decompile/datatests/inline-indirect-tail-nested.xml||GHIDRA||||END|
+src/decompile/datatests/inline-indirect-tail-repeat.xml||GHIDRA||||END|
+src/decompile/datatests/nested-switch-merged-range.xml||GHIDRA||||END|

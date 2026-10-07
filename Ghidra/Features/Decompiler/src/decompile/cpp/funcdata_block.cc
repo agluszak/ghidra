@@ -516,6 +516,14 @@ JumpTable::RecoveryMode Funcdata::stageJumpTable(Funcdata &partial,JumpTable *jt
     // Do full analysis on the table if we haven't before
     partial.flags |= jumptablerecovery_on; // Mark that this Funcdata object is dedicated to jumptable recovery
     partial.truncatedFlow(this,flow);
+    // Another unresolved switch can temporarily cut off an indirect branch,
+    // including a second expansion of the same inlined function. Dead-code
+    // analysis frees these operations; retain their sequence identities so a
+    // later lookup can distinguish unreachable flow from a broken clone.
+    for(list<PcodeOp *>::const_iterator iter=partial.beginOpDead();iter!=partial.endOpDead();++iter) {
+      if ((*iter)->code() == CPUI_BRANCHIND)
+        partial.unreachableJumpTables.insert((*iter)->getSeqNum());
+    }
 
     string oldactname = glb->allacts.getCurrentName(); // Save off old action
     try {
@@ -540,10 +548,17 @@ JumpTable::RecoveryMode Funcdata::stageJumpTable(Funcdata &partial,JumpTable *jt
   }
   PcodeOp *partop = partial.findOp(op->getSeqNum());
 
+  if (partop == (PcodeOp *)0 && partial.unreachableJumpTables.count(op->getSeqNum()) != 0) {
+    jt->markPartial();
+    return JumpTable::success;
+  }
+
   if (partop==(PcodeOp *)0 || partop->code() != CPUI_BRANCHIND || partop->getAddr() != op->getAddr())
     throw LowlevelError("Error recovering jumptable: Bad partial clone");
-  if (partop->isDead())	// Indirectop we were trying to recover was eliminated as dead code (unreachable)
-    return JumpTable::success;			// Return jumptable as
+  if (partop->isDead()) {	// More recovered flow can make this indirect branch reachable
+    jt->markPartial();
+    return JumpTable::success;
+  }
 
   // Test if the branch target is copied from the return address.
   if (testForReturnAddress(partop->getIn(0)))
@@ -552,7 +567,8 @@ JumpTable::RecoveryMode Funcdata::stageJumpTable(Funcdata &partial,JumpTable *jt
   try {
     jt->setLoadCollect(flow->doesJumpRecord());
     jt->setIndirectOp(partop);
-    if (jt->isPartial())
+    // A deferred unreachable branch has no first-stage addresses yet.
+    if (jt->isPartial() && jt->numEntries() != 0)
       jt->recoverMultistage(&partial);
     else
       jt->recoverAddresses(&partial); // Analyze partial to recover jumptable addresses
@@ -670,8 +686,10 @@ JumpTable *Funcdata::recoverJumpTable(Funcdata &partial,PcodeOp *op,FlowInfo *fl
 	return jt;		// Previously calculated jumptable (NOT an override and NOT incomplete)
     }
     mode = stageJumpTable(partial,jt,op,flow); // Recover empty jumptable or based on override information
-    if (mode != JumpTable::success)
+    if (mode != JumpTable::success) {
+      removeJumpTable(jt); // A failed deferred table must not retain a partial-clone op
       return (JumpTable *)0;
+    }
     jt->setIndirectOp(op);	// Relink table back to original op
     return jt;
   }
